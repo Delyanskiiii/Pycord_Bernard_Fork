@@ -53,7 +53,7 @@ from .backoff import ExponentialBackoff
 from .errors import ClientException, ConnectionClosed
 from .gateway import *
 from .player import AudioPlayer, AudioSource
-from .sinks import RawData, RecordingException, Sink
+from .sinks import RawData, RecordingException, ListeningException, Sink
 from .utils import MISSING
 
 if TYPE_CHECKING:
@@ -260,6 +260,7 @@ class VoiceClient(VoiceProtocol):
 
         self.paused = False
         self.recording = False
+        self.listening = False
         self.user_timestamps = {}
         self.sink = None
         self.starting_time = None
@@ -697,7 +698,7 @@ class VoiceClient(VoiceProtocol):
         self._player.start()
         return future
 
-    def unpack_audio(self, data):
+    def unpack_audio(self, data, live=False):
         """Takes an audio packet received from Discord and decodes it into pcm audio data.
         If there are no users talking in the channel, `None` will be returned.
 
@@ -724,47 +725,63 @@ class VoiceClient(VoiceProtocol):
         if data.decrypted_data == b"\xf8\xff\xfe":  # Frame of silence
             return
 
-        self.decoder.decode(data)
+        return self.decoder.decode(data, live)
 
-    def is_speaking(self) -> bool:
-        """Returns a :class:`bool` indicating whether any user is currently speaking in the current voice channel the bot is in.
-        Returns True if a user is speaking, False if package has arived but the frame is silent and None if there is no package.
+    def start_listening(self, queue):
+        """The bot will begin recording audio from the current voice channel it is in.
+        This function uses a thread so the current code line will not be stopped.
         Must be in a voice channel to use.
+        Must not be already recording.
 
-        .. versionadded:: not yet
+        .. versionadded:: 
 
+        Parameters
+        ----------
+        queue: :class:`Queue`
+            A Queue which will "store" the audio data.
+            The data then can be obtained and processed in the main thread.
         Raises
         ------
         RecordingException
             Not connected to a voice channel.
+        RecordingException
+            Can't listen while recording.
+        ListeningException
+            Already listening.
         """
         if not self.is_connected():
-            raise RecordingException("Not connected to voice channel.")
+            raise ListeningException("Not connected to voice channel.")
+        if self.recording:
+            raise RecordingException("Can't listen while recording.")
+        if self.listening:
+            raise ListeningException("Already listening.")
         
         self.empty_socket()
+        self.decoder = opus.DecodeManager(self)
+        self.listening = True
 
-        ready, _, err = select.select([self.socket], [], [self.socket], 0.01)
-        if not ready and err:
-            print(f"Socket error: {err}")
+        t = threading.Thread(
+            target=self.recv_live_audio,
+            args=(
+                queue,
+            ),
+        )
+        t.start()
 
-        try:
-            data = self.socket.recv(4096)
-        except OSError:
-            return
+    def stop_listening(self):
+        """Stops the listening process.
+        Must be already listening.
 
-        if 200 <= data[1] <= 204:
-            # RTCP received.
-            # RTCP provides information about the connection
-            # as opposed to actual audio data, so it's not
-            # important at the moment.
-            return
+        .. versionadded::
 
-        data = RawData(data, self)
-
-        if data.decrypted_data == b"\xf8\xff\xfe":  # Frame of silence
-            return False
-        
-        return True
+        Raises
+        ------
+        RecordingException
+            Not currently recording.
+        """
+        if not self.listening:
+            raise ListeningException("Not currently recording audio.")
+        self.listening = False
 
     def start_recording(self, sink, callback, *args, sync_start: bool = False):
         """The bot will begin recording audio from the current voice channel it is in.
@@ -792,6 +809,8 @@ class VoiceClient(VoiceProtocol):
             Not connected to a voice channel.
         RecordingException
             Already recording.
+        ListeningException
+            Can't record while listening.
         RecordingException
             Must provide a Sink object.
         """
@@ -799,6 +818,8 @@ class VoiceClient(VoiceProtocol):
             raise RecordingException("Not connected to voice channel.")
         if self.recording:
             raise RecordingException("Already recording.")
+        if self.listening:
+            raise ListeningException("Can't record while listening.")
         if not isinstance(sink, Sink):
             raise RecordingException("Must provide a Sink object.")
 
@@ -891,6 +912,22 @@ class VoiceClient(VoiceProtocol):
 
         if result is not None:
             print(result)
+
+    def recv_live_audio(self, queue):
+        while self.listening:
+            ready, _, err = select.select([self.socket], [], [self.socket], 0.01)
+            if not ready:
+                if err:
+                    print(f"Socket error: {err}")
+                continue
+
+            try:
+                data: RawData = self.socket.recv(4096)
+            except:
+                continue
+
+            data = self.unpack_audio(data, True)
+            queue.put(data)
 
     def recv_decoded_audio(self, data: RawData):
         # Add silence when they were not being recorded.

@@ -39,6 +39,14 @@ class RecordingException(SinkException):
     """
 
 
+class ListeningException(SinkException):
+    """Exception that's thrown when there is an error while trying to listen
+    for audio from a voice channel.
+
+    .. versionadded::
+    """
+
+
 class MP3SinkError(SinkException):
     """Exception thrown when an exception occurs with :class:`MP3Sink`
 

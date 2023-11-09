@@ -529,10 +529,28 @@ class DecodeManager(threading.Thread, _OpusStruct):
 
         self._end_thread = threading.Event()
 
-    def decode(self, opus_frame):
+    def decode(self, opus_frame, live=False):
         if not isinstance(opus_frame, RawData):
             raise TypeError("opus_frame should be a RawData object.")
+        
+        if live:
+            return self.decode_live(opus_frame)
+        
         self.decode_queue.append(opus_frame)
+
+    def decode_live(self, data):
+        try:
+            if data.decrypted_data is None:
+                return
+            else:
+                data.decoded_data = self.get_decoder(data.ssrc).decode(
+                    data.decrypted_data
+                )
+        except OpusError:
+            print("Error occurred while decoding opus frame.")
+            return
+
+        return data
 
     def run(self):
         while not self._end_thread.is_set():
