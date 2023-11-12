@@ -929,6 +929,8 @@ class VoiceClient(VoiceProtocol):
             data = self.unpack_audio(data, True)
             queue.put(data)
 
+        queue.clear()
+
     def recv_decoded_audio(self, data: RawData):
         # Add silence when they were not being recorded.
         if data.ssrc not in self.user_timestamps:  # First packet from user
