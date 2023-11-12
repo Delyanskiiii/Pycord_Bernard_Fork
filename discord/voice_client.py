@@ -780,7 +780,7 @@ class VoiceClient(VoiceProtocol):
             Not currently recording.
         """
         if not self.listening:
-            raise ListeningException("Not currently recording audio.")
+            raise ListeningException("Not currently listening to audio.")
         self.listening = False
 
     def start_recording(self, sink, callback, *args, sync_start: bool = False):
