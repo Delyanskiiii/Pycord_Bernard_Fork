@@ -927,10 +927,10 @@ class VoiceClient(VoiceProtocol):
                 continue
 
             data = self.unpack_audio(data, True)
-            queue.put(data)
+            queue.put_nowait(data)
 
         while not queue.empty():
-            queue.get()
+            queue.get_nowait()
 
     def recv_decoded_audio(self, data: RawData):
         # Add silence when they were not being recorded.
